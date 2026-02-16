@@ -1,12 +1,26 @@
-import Dashboard from "./dashboard/Dashboard"
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import Dashboard from './dashboard/Dashboard';
+// import StudentsList from './pages/students/StudentsList';
+// import AddStudents from './pages/students/AddStudents';
 
 function App() {
-
   return (
-  <div>
-    <Dashboard/>
-  </div>
-  )
+    <Router>
+      <Routes>
+        {/* Dashboard Route */}
+        <Route path="/" element={<Dashboard />} />
+        <Route path="/dashboard" element={<Dashboard />} />
+        
+        {/* Students Routes */}
+        {/* <Route path="/students" element={<StudentsList />} />
+        <Route path="/students/add" element={<AddStudents />} /> */}
+        
+        {/* Redirect any unknown route to dashboard */}
+        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      </Routes>
+    </Router>
+  );
 }
 
-export default App
+export default App;
