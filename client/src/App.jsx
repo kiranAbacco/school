@@ -1,14 +1,18 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
 import './App.css'
-import Login from './login'
+import Route1 from '../src/admin/Routes'
+import Route2 from '../src/student/Routes'
+import Route3 from '../src/superAdmin/Routes'
+import Route4 from '../src/teacher/Routes'
 
 function App() {
-  const [count, setCount] = useState(0)
-
   return (
-  <><Login/> </>
+    <>
+      <Route1 />
+      <Route2 />
+      <Route3 />
+      <Route4 />
+      
+    </>
   )
 }
 
