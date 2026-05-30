@@ -21,7 +21,9 @@ import {
   Bus,
   MessageCircle,
   MapPinned,
-  BookMarked
+  BookMarked,
+  ReceiptText,
+  FileSearch
 } from "lucide-react";
 
  
@@ -79,7 +81,7 @@ const NAV = [
   ...(userPlan !== "Silver"
     ? [{
         icon: FileText,
-        label: "Exams",
+        label: "Exams & Results",
         to: "/admin/exams",
       }]
     : []),
@@ -114,6 +116,22 @@ const NAV = [
         to: "/admin/meetings",
       }]
     : []),
+  // ✅ Premium only
+  ...(userPlan === "Premium"
+    ? [{
+        icon: ReceiptText,
+        label: "Answer Sheet Management",
+        to: "/admin/viewing-settings",
+      }]
+    : []),
+    // ✅ Premium only
+...(userPlan === "Premium"
+  ? [{
+      icon: FileSearch,
+      label: "Answer Sheet Requests",
+      to: "/admin/script-view-requests",
+    }]
+  : []),
 
   { icon: Images, label: "Gallery", to: "/admin/gallery" },
 
@@ -143,6 +161,7 @@ const NAV = [
         to: "/admin/tracking",
       }]
     : []),
+
 ];
 
   return (

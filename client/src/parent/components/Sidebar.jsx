@@ -14,7 +14,8 @@ import {
   CreditCard,
   Library,
   MessageCircle,
-  BookOpen 
+  BookOpen,
+  FileSearch
 } from "lucide-react";
 import { getAuth } from "../../auth/storage";
 
@@ -70,7 +71,14 @@ function Sidebar({ isOpen, onClose }) {
           href: `${base}/fees-payments`,
         }]
       : []),
-
+  // ✅ Premium only
+  ...(userPlan === "Premium"
+    ? [{
+        icon: FileSearch,
+        label: "Answer Sheet Viewing",
+        href: `${base}/parent-script-viewing`,
+      }]
+    : []),
     // ✅ Premium only
     ...(userPlan === "Premium"
       ? [{

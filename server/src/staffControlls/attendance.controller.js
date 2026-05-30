@@ -7,7 +7,10 @@ import {
   uploadAttendanceReportToR2,
   sendMonthlyAttendanceWhatsApp,
 } from "../whatsapp/attendanceWhatsAppService.js";
+import { sendAttendanceSMS } from "../SMS/sms.helper.js";
+
 import fs from "fs";
+
 export const getTeacherClasses = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -205,7 +208,8 @@ export const getClassStudentsForAttendance = async (req, res) => {
  */
 export const markAttendance = async (req, res) => {
   try {
-    const { classSectionId, academicYearId, date, records } = req.body;
+    const { classSectionId, academicYearId, date, records, notifyChannel } = req.body;
+    // notifyChannel: "whatsapp" | "sms" | undefined (undefined = save only, no notification)
 
     if (!classSectionId || !academicYearId || !date || !records) {
       return res.status(400).json({
@@ -304,20 +308,33 @@ export const markAttendance = async (req, res) => {
 
           if (!parent?.phone) continue;
 
-          await sendAttendanceWhatsApp({
-            phone: parent.phone,
-            studentName: student.name,
-            status:
-              record.status === "PRESENT"
-                ? "Present"
-                : record.status === "ABSENT"
-                ? "Absent"
-                : record.status,
-            schoolName: school?.name || "School",
-          });
+          // ── WhatsApp: only if channel is "whatsapp" ──────────────
+          if (notifyChannel === "whatsapp") {
+            await sendAttendanceWhatsApp({
+              phone: parent.phone,
+              studentName: student.name,
+              status:
+                record.status === "PRESENT"
+                  ? "Present"
+                  : record.status === "ABSENT"
+                  ? "Absent"
+                  : record.status,
+              schoolName: school?.name || "School",
+            });
+          }
+
+          // ── SMS: only if channel is "sms" ────────────────────────
+          if (notifyChannel === "sms" && (record.status === "ABSENT" || record.status === "PRESENT")) {
+            await sendAttendanceSMS({
+              mobile: parent.phone,
+              studentName: student.name,
+              schoolName: school?.name || "School",
+              status: record.status,   // ← pass status
+            });
+          }
         }
       } catch (err) {
-        console.error("Attendance WhatsApp Send Error:", err);
+        console.error("Attendance Notification Send Error:", err);
       }
     }
 
@@ -692,15 +709,26 @@ export const sendMonthlyAttendanceReport = async (req, res) => {
       }
       for (const link of student.parentLinks || []) {
         const parent = link.parent;
+
         if (!parent?.phone) continue;
 
+        // WHATSAPP — monthly summary report (image card)
         await sendMonthlyAttendanceWhatsApp({
           phone: parent.phone,
-          imageUrl,       // ✅ now a real public R2 URL
           studentName: student.name,
           monthName,
+          imageUrl,
           schoolName: school?.name || "School",
         });
+
+        // SMS — monthly summary (present/absent derived from percentage)
+        if (attendancePercentage < 75) {
+          await sendAttendanceSMS({
+            mobile: parent.phone,
+            studentName: student.name,
+            schoolName: school?.name || "School",
+          });
+        }
       }
     }
 

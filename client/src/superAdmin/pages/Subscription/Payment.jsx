@@ -1,68 +1,148 @@
 // src/superAdmin/pages/Subscription/Payment.jsx
-import { useState, useEffect } from "react";
+// ✅ Fully responsive: mobile (bottom-sheet), tablet (single col scroll), desktop (two-col)
+// ✅ Auto-fetches last payment → pre-fills form + student/teacher counts
+// ✅ All API calls go to /api/subscription/* (upgrade flow → stores in Subscription table)
+
+import { useState, useRef, useEffect } from "react";
 import {
-  X, Shield, Zap, Crown, Users, CheckCircle2,
-  ChevronRight, Sparkles, ArrowLeft, Lock, Pencil
+  X, Shield, Zap, Crown, Users, CheckCircle2, ChevronRight,
+  Sparkles, Lock, GraduationCap, BookOpen, RefreshCw, AlertCircle,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { getToken } from "../../../auth/storage";
 
 const API_URL = import.meta.env.VITE_API_URL;
 
-const plans = [
+const PLANS = [
   {
-    id: "silver",
-    name: "Silver",
-    price: 300,
-    icon: Shield,
-    color: "#6A89A7",
+    id: "silver", name: "Silver", price: 300, icon: Shield, color: "#6A89A7",
     features: ["1 School", "Basic reports", "Email support"],
   },
   {
-    id: "gold",
-    name: "Gold",
-    price: 500,
-    icon: Zap,
-    color: "#88BDF2",
+    id: "gold", name: "Gold", price: 500, icon: Zap, color: "#88BDF2",
     features: ["Up to 5 Schools", "Advanced analytics", "Priority support"],
   },
   {
-    id: "premium",
-    name: "Premium",
-    price: 800,
-    icon: Crown,
-    color: "#384959",
+    id: "premium", name: "Premium", price: 800, icon: Crown, color: "#384959",
     features: ["Unlimited schools", "Full suite", "24/7 dedicated support"],
   },
 ];
 
-export default function PaymentModal({ isOpen, onClose, selectedPlanId }) {
-  const [userCount, setUserCount] = useState(1);
-  const [loading, setLoading] = useState(false);
-  const [prefillLoading, setPrefillLoading] = useState(false);
-  const [step, setStep] = useState("summary");
-  const [errors, setErrors] = useState({});
-  const [isEditable, setIsEditable] = useState(false);
-  const navigate = useNavigate();
+const MIN_STUDENTS = 5;
+const MIN_TEACHERS = 2;
+
+// ─── Counter ─────────────────────────────────────────────────────────────────
+function Counter({ label, icon: Icon, value, setValue, errorKey, errors, setErrors, minVal }) {
+  const [inputVal, setInputVal] = useState(String(value));
+  const focused = useRef(false);
+
+  useEffect(() => {
+    if (!focused.current) setInputVal(String(value));
+  }, [value]);
+
+  const dec = () => {
+    const next = Math.max(minVal, value - 1);
+    setValue(next);
+    if (errors[errorKey]) setErrors(p => ({ ...p, [errorKey]: "" }));
+  };
+  const inc = () => {
+    setValue(value + 1);
+    if (errors[errorKey]) setErrors(p => ({ ...p, [errorKey]: "" }));
+  };
+
+  return (
+    <div className="flex-1 min-w-0">
+      <div className="flex items-center gap-1.5 mb-2">
+        <Icon size={11} className="text-blue-300/60" />
+        <span className="text-[10px] font-bold text-blue-200/60 uppercase tracking-widest">{label}</span>
+      </div>
+      <div className="flex items-center gap-2">
+        <button type="button" onClick={dec} aria-label={`Decrease ${label}`}
+          className="w-9 h-9 sm:w-8 sm:h-8 rounded-xl border border-blue-300/25 bg-blue-300/10 text-blue-200 text-xl font-light flex items-center justify-center active:scale-95 hover:bg-blue-300/20 transition-all flex-shrink-0"
+        >−</button>
+        <input
+          type="number" min={minVal} value={inputVal}
+          onFocus={() => { focused.current = true; }}
+          onChange={e => {
+            setInputVal(e.target.value);
+            if (errors[errorKey]) setErrors(p => ({ ...p, [errorKey]: "" }));
+          }}
+          onBlur={() => {
+            focused.current = false;
+            const n = parseInt(inputVal, 10);
+            const c = isNaN(n) || n < minVal ? minVal : n;
+            setValue(c);
+            setInputVal(String(c));
+          }}
+          aria-label={`${label} count`}
+          className={`w-14 h-9 sm:h-8 rounded-xl border text-center text-sm font-bold text-white outline-none transition-all
+            [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none
+            focus:border-blue-300/60
+            ${errors[errorKey] ? "border-red-400/70" : "border-blue-300/25"}
+          `}
+          style={{ background: "rgba(255,255,255,0.08)" }}
+        />
+        <button type="button" onClick={inc} aria-label={`Increase ${label}`}
+          className="w-9 h-9 sm:w-8 sm:h-8 rounded-xl border border-blue-300/25 bg-blue-300/10 text-blue-200 text-xl font-light flex items-center justify-center active:scale-95 hover:bg-blue-300/20 transition-all flex-shrink-0"
+        >+</button>
+      </div>
+      {errors[errorKey] && (
+        <p className="text-[10px] text-red-400 mt-1.5">⚠ {errors[errorKey]}</p>
+      )}
+    </div>
+  );
+}
+
+// ─── Field ────────────────────────────────────────────────────────────────────
+function Field({ id, label, name, type = "text", placeholder, autoComplete, value, onChange, error }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label htmlFor={id} className="text-[12px] font-semibold text-[#384959] tracking-[0.3px]">
+        {label}
+      </label>
+      <input
+        id={id} name={name} type={type}
+        placeholder={placeholder} autoComplete={autoComplete}
+        value={value} onChange={onChange}
+        className={`h-11 rounded-xl border-[1.5px] px-3.5 text-[14px] text-[#384959] bg-[#fafcfe] outline-none transition-all font-dm placeholder:text-[#b0c4d8]
+          focus:border-[#88BDF2] focus:shadow-[0_0_0_3px_rgba(136,189,242,0.15)]
+          ${error ? "border-[#f87171] shadow-[0_0_0_3px_rgba(248,113,113,0.1)]" : "border-[#dde7f0]"}
+        `}
+      />
+      {error && <span className="text-[11px] text-red-500">⚠ {error}</span>}
+    </div>
+  );
+}
+
+// ─── Main Modal ───────────────────────────────────────────────────────────────
+export default function PaymentModal({ isOpen, onClose, selectedPlanId, isUpgrade = true }) {
+  const [studentCount, setStudentCount] = useState(MIN_STUDENTS);
+  const [teacherCount, setTeacherCount] = useState(MIN_TEACHERS);
+  const [loading,      setLoading]      = useState(false);
+  const [prefilling,   setPrefilling]   = useState(false);
+  const [errors,       setErrors]       = useState({});
+  const [hasPrefilled, setHasPrefilled] = useState(false);
 
   const [form, setForm] = useState({
-    fullName: "",
-    schoolName: "",
-    email: "",
-    phone: "",
-    address: "",
+    fullName: "", schoolName: "", email: "", phone: "", address: "",
   });
 
-  // ── Auto-fetch user details when modal opens ──────────────────────────────
+  // ── Auto-fetch on open — uses upgrade-specific endpoint ────────────────────
   useEffect(() => {
     if (!isOpen) return;
-    const fetchData = async () => {
-      setPrefillLoading(true);
+    setErrors({});
+    setHasPrefilled(false);
+
+    const fetchLatest = async () => {
+      setPrefilling(true);
       try {
-        const res = await fetch(`${API_URL}/api/payment/latest`, {
-          headers: {
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
-          },
+        const token = getToken();
+        if (!token) return;
+
+        // ✅ Uses upgrade controller's pre-fill endpoint (reads from Payment, superAdminId scoped)
+        const res = await fetch(`${API_URL}/api/subscription/latest-details`, {
+          headers: { Authorization: `Bearer ${token}` },
         });
+        if (!res.ok) return;
         const data = await res.json();
         if (data) {
           setForm({
@@ -72,75 +152,88 @@ export default function PaymentModal({ isOpen, onClose, selectedPlanId }) {
             phone:      data.phone      || "",
             address:    data.address    || "",
           });
+          if (data.studentCount) setStudentCount(Math.max(MIN_STUDENTS, Number(data.studentCount)));
+          if (data.teacherCount) setTeacherCount(Math.max(MIN_TEACHERS, Number(data.teacherCount)));
+          if (data.fullName) setHasPrefilled(true);
         }
-      } catch (err) {
-        console.error("Prefill error:", err);
+      } catch (e) {
+        console.error("Pre-fill error:", e);
       } finally {
-        setPrefillLoading(false);
+        setPrefilling(false);
       }
     };
-    fetchData();
+
+    fetchLatest();
   }, [isOpen]);
 
-  const selectedPlan = plans.find((p) => p.id === selectedPlanId);
+  // lock body scroll
+  useEffect(() => {
+    document.body.style.overflow = isOpen ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  }, [isOpen]);
+
+  const selectedPlan = PLANS.find(p => p.id === selectedPlanId);
   if (!isOpen || !selectedPlan) return null;
 
-  const PlanIcon   = selectedPlan.icon;
+  const userCount  = Number(studentCount) + Number(teacherCount);
   const basePrice  = selectedPlan.price * userCount;
   const taxAmount  = Math.round(basePrice * 0.12);
   const totalPrice = basePrice + taxAmount;
 
-  const handleChange = (e) => {
-    setForm({ ...form, [e.target.name]: e.target.value });
-    if (errors[e.target.name]) setErrors({ ...errors, [e.target.name]: "" });
+  const handleChange = e => {
+    const { name, value } = e.target;
+    setForm(p => ({ ...p, [name]: value }));
+    if (errors[name]) setErrors(p => ({ ...p, [name]: "" }));
   };
 
   const validate = () => {
-    const newErrors = {};
-    if (!form.fullName.trim())   newErrors.fullName   = "Full name is required";
-    if (!form.email.trim())      newErrors.email      = "Email is required";
-    else if (!/\S+@\S+\.\S+/.test(form.email)) newErrors.email = "Enter a valid email";
-    if (!form.schoolName.trim()) newErrors.schoolName = "School name is required";
-    if (!form.phone.trim())      newErrors.phone      = "Phone number is required";
-    if (!form.address.trim())    newErrors.address    = "City / Address is required";
-    if (!userCount || userCount < 1) newErrors.userCount = "Please add at least 1 user";
-    return newErrors;
+    const e = {};
+    if (!form.fullName.trim())   e.fullName   = "Full name is required";
+    if (!form.email.trim())      e.email      = "Email is required";
+    else if (!/\S+@\S+\.\S+/.test(form.email)) e.email = "Enter a valid email";
+    if (!form.schoolName.trim()) e.schoolName = "School name is required";
+    if (!form.phone.trim())      e.phone      = "Phone number is required";
+    if (!form.address.trim())    e.address    = "City / Address is required";
+    if (studentCount < MIN_STUDENTS) e.studentCount = `Minimum ${MIN_STUDENTS} students`;
+    if (teacherCount < MIN_TEACHERS) e.teacherCount = `Minimum ${MIN_TEACHERS} teachers`;
+    return e;
   };
 
   const handlePayment = async () => {
     if (loading) return;
-
-    const newErrors = validate();
-    if (Object.keys(newErrors).length > 0) {
-      setErrors(newErrors);
-      if (newErrors.userCount) setStep("summary");
-      return;
-    }
-
+    const errs = validate();
+    if (Object.keys(errs).length > 0) { setErrors(errs); return; }
     setLoading(true);
 
     try {
-      // ── 1. Create order ─────────────────────────────────────────────────
-      const res = await fetch(`${API_URL}/api/payment/create-order`, {
+      const token = getToken();
+
+      // ✅ Step 1: Create order via upgrade endpoint (requires auth)
+      const res = await fetch(`${API_URL}/api/subscription/create-order`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           ...form,
-          planName: selectedPlan.name, // ✅ backend needs planName not planId
+          planId:       selectedPlan.id,
+          planName:     selectedPlan.name,
           userCount,
-          amount: totalPrice,
+          studentCount,
+          teacherCount,
+          amount:       totalPrice,
         }),
       });
 
       const data = await res.json();
-
       if (!res.ok || !data.orderId) {
         alert(`❌ Order creation failed: ${data.error || "Unknown error"}`);
         setLoading(false);
         return;
       }
 
-      // ── 2. Open Razorpay ────────────────────────────────────────────────
+      // ✅ Step 2: Open Razorpay
       const options = {
         key:         import.meta.env.VITE_RAZORPAY_KEY,
         amount:      data.amount,
@@ -151,72 +244,53 @@ export default function PaymentModal({ isOpen, onClose, selectedPlanId }) {
 
         handler: async (response) => {
           try {
-            // ── 3. Verify payment ──────────────────────────────────────────
-            const verifyRes = await fetch(`${API_URL}/api/payment/verify-payment`, {
+            // ✅ Step 3: Verify via upgrade endpoint → creates Subscription record
+            const vRes = await fetch(`${API_URL}/api/subscription/verify-payment`, {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              },
               body: JSON.stringify({
                 razorpay_order_id:   response.razorpay_order_id,
                 razorpay_payment_id: response.razorpay_payment_id,
                 razorpay_signature:  response.razorpay_signature,
                 paymentId:           data.paymentId,
-                phone:               form.phone,
               }),
             });
 
-            const verifyData = await verifyRes.json();
-
-            if (verifyData.status === "verified") {
-              // ── 4. Create subscription ─────────────────────────────────
-              await fetch(`${API_URL}/api/subscription/subscribe`, {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  Authorization: `Bearer ${localStorage.getItem("token")}`,
-                },
-                body: JSON.stringify({
-                  universityId: localStorage.getItem("universityId"),
-                  planId:       selectedPlan.id,
-                  paymentId:    data.paymentId,
-                  userCount,
-                }),
-              });
-
+            const vData = await vRes.json();
+            if (vData.status === "verified") {
               onClose();
-              // Reload so PlansTimeline refreshes
               window.location.reload();
             } else {
-              alert("❌ Payment verification failed. Contact support with ID: " + response.razorpay_payment_id);
+              alert("❌ Verification failed. Contact support: " + response.razorpay_payment_id);
             }
-          } catch (err) {
-            console.error("Verify error:", err);
-            alert("❌ Verification request failed. Please contact support.");
+          } catch (e) {
+            console.error("Verify error:", e);
+            alert("❌ Verification failed. Please contact support.");
           } finally {
             setLoading(false);
           }
         },
 
-        modal: {
-          ondismiss: () => setLoading(false),
-        },
+        modal: { ondismiss: () => setLoading(false) },
 
-        prefill: {
-          name:    form.fullName,
-          email:   form.email,
-          contact: form.phone,
-        },
-
-        theme: { color: selectedPlan.color },
+        prefill: { name: form.fullName, email: form.email, contact: form.phone },
+        theme:   { color: selectedPlan.color },
       };
 
       const rzp = new window.Razorpay(options);
 
       rzp.on("payment.failed", async (response) => {
-        console.error("Payment Failed:", response.error);
         try {
-          await fetch(`${API_URL}/api/payment/verify-payment`, {
+          // Mark as FAILED in payment table
+          await fetch(`${API_URL}/api/subscription/verify-payment`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
             body: JSON.stringify({
               paymentId:           data.paymentId,
               razorpay_order_id:   response.error.metadata?.order_id,
@@ -224,18 +298,18 @@ export default function PaymentModal({ isOpen, onClose, selectedPlanId }) {
               failed: true,
             }),
           });
-        } catch (err) {
-          console.error("Failed to report failure:", err);
+        } catch (e) {
+          console.error(e);
         } finally {
           setLoading(false);
         }
-        alert(`❌ Payment Failed: ${response.error.description}\nReason: ${response.error.reason}`);
+        alert(`❌ Payment Failed: ${response.error.description}`);
       });
 
       rzp.open();
 
-    } catch (err) {
-      console.error("handlePayment error:", err);
+    } catch (e) {
+      console.error(e);
       alert("❌ Something went wrong. Please try again.");
       setLoading(false);
     }
@@ -244,321 +318,305 @@ export default function PaymentModal({ isOpen, onClose, selectedPlanId }) {
   return (
     <>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=DM+Sans:wght@300;400;500&display=swap');
-        *, *::before, *::after { box-sizing: border-box; }
-
-        .pm-overlay {
-          position: fixed; inset: 0; z-index: 9999;
-          display: flex; align-items: center; justify-content: center;
-          background: rgba(15,23,32,0.55);
-          backdrop-filter: blur(8px);
-          padding: 16px;
-          font-family: 'DM Sans', sans-serif;
-          animation: pm-fadein 0.2s ease;
-        }
-        @keyframes pm-fadein { from { opacity:0 } to { opacity:1 } }
-        @keyframes pm-slidein {
-          from { opacity:0; transform: translateY(20px) scale(0.98) }
-          to   { opacity:1; transform: translateY(0) scale(1) }
-        }
-        @keyframes pm-spin { to { transform: rotate(360deg) } }
-
-        .pm-modal {
-          width: 100%; max-width: 900px; max-height: 92vh;
-          background: #fff; border-radius: 24px;
-          overflow: hidden; display: flex; flex-direction: column;
-          box-shadow: 0 32px 80px rgba(0,0,0,0.22);
-          animation: pm-slidein 0.28s cubic-bezier(0.34,1.56,0.64,1);
-        }
-        .pm-body { display: flex; flex: 1; overflow: hidden; }
-
-        /* LEFT */
-        .pm-left {
-          width: 300px; flex-shrink: 0;
-          background: linear-gradient(160deg, #384959 0%, #4a6278 100%);
-          color: #fff; overflow-y: auto;
-          display: flex; flex-direction: column;
-        }
-        .pm-left-inner { padding: 32px 28px; display: flex; flex-direction: column; gap: 20px; }
-        .pm-plan-badge {
-          display: inline-flex; align-items: center; gap: 6px;
-          background: rgba(255,255,255,0.15); border-radius: 99px;
-          padding: 5px 12px; font-size: 10px; font-weight: 700;
-          letter-spacing: 0.1em; text-transform: uppercase; width: fit-content;
-        }
-        .pm-plan-icon {
-          width: 52px; height: 52px; border-radius: 14px;
-          display: flex; align-items: center; justify-content: center;
-          background: rgba(255,255,255,0.15);
-        }
-        .pm-plan-title { font-size: 28px; font-weight: 800; font-family: 'Sora', sans-serif; line-height: 1.1; }
-        .pm-plan-sub   { font-size: 12px; opacity: 0.65; margin-top: -8px; }
-        .pm-features   { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
-        .pm-features li { display: flex; align-items: center; gap: 8px; font-size: 12px; opacity: 0.85; }
-        .pm-divider { height: 1px; background: rgba(255,255,255,0.12); }
-
-        /* User control */
-        .pm-user-label { display: flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.7; margin-bottom: 8px; }
-        .pm-user-row   { display: flex; align-items: center; gap: 8px; }
-        .pm-user-btn   { width: 32px; height: 32px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.25); background: rgba(255,255,255,0.1); color: #fff; font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.15s; }
-        .pm-user-btn:hover { background: rgba(255,255,255,0.22); }
-        .pm-user-input { width: 64px; text-align: center; background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: #fff; font-size: 15px; font-weight: 700; padding: 5px; outline: none; }
-        .pm-user-error { font-size: 10px; color: #fca5a5; margin-top: 4px; display: block; }
-
-        /* Price */
-        .pm-price-card { background: rgba(255,255,255,0.1); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
-        .pm-price-row  { display: flex; justify-content: space-between; align-items: center; }
-        .pm-price-row.total { border-top: 1px solid rgba(255,255,255,0.15); padding-top: 10px; margin-top: 2px; }
-        .pm-price-label { font-size: 11px; opacity: 0.7; }
-        .pm-price-value { font-size: 12px; font-weight: 600; }
-        .pm-price-total-val { font-size: 20px; font-weight: 800; }
-
-        /* Mobile next */
-        .pm-mobile-next { display: none; width: 100%; padding: 12px; border-radius: 12px; border: none; background: rgba(255,255,255,0.15); color: #fff; font-size: 13px; font-weight: 700; cursor: pointer; align-items: center; justify-content: center; gap: 6px; transition: background 0.15s; }
-        .pm-mobile-next:hover { background: rgba(255,255,255,0.22); }
-
-        /* RIGHT */
-        .pm-right { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
-        .pm-right-header { padding: 28px 32px 20px; border-bottom: 1px solid #f0f4f8; display: flex; align-items: flex-start; gap: 16px; }
-        .pm-right-title  { font-size: 20px; font-weight: 800; color: #1a2433; font-family: 'Sora', sans-serif; }
-        .pm-right-sub    { font-size: 12px; color: #8899aa; margin-top: 2px; }
-        .pm-close        { width: 32px; height: 32px; border-radius: 8px; border: 1px solid #e8edf2; background: #f8fafc; color: #8899aa; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.15s; flex-shrink: 0; }
-        .pm-close:hover  { background: #fee2e2; border-color: #fca5a5; color: #ef4444; }
-
-        /* Prefill banner */
-        .pm-prefill-banner {
-          margin: 0 32px 0; padding: 10px 16px; border-radius: 10px;
-          background: #f0f9ff; border: 1px solid #bae6fd;
-          display: flex; align-items: center; justify-content: space-between;
-          font-size: 11px; color: #0369a1;
-        }
-        .pm-prefill-edit {
-          display: flex; align-items: center; gap: 4px;
-          background: #0ea5e9; color: #fff; border: none; border-radius: 6px;
-          padding: 4px 10px; font-size: 10px; font-weight: 700; cursor: pointer;
-          transition: background 0.15s;
-        }
-        .pm-prefill-edit:hover { background: #0284c7; }
-
-        /* Form */
-        .pm-field-group { padding: 20px 32px; display: flex; flex-direction: column; gap: 16px; flex: 1; }
-        .pm-row    { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-        .pm-field  { display: flex; flex-direction: column; gap: 5px; }
-        .pm-label  { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: #8899aa; }
-        .pm-input  { padding: 10px 14px; border: 1.5px solid #e2e8f0; border-radius: 10px; font-size: 13px; color: #1a2433; outline: none; background: #fff; transition: border-color 0.15s, box-shadow 0.15s; font-family: 'DM Sans', sans-serif; }
-        .pm-input:focus   { border-color: #88BDF2; box-shadow: 0 0 0 3px rgba(136,189,242,0.15); }
-        .pm-input:disabled { background: #f8fafc; color: #64748b; cursor: not-allowed; }
-        .pm-input.pm-error { border-color: #f87171; }
-        .pm-err-msg { font-size: 10px; color: #ef4444; }
-
-        /* Pay button */
-        .pm-pay-btn {
-          margin: 16px 32px; padding: 14px 24px;
-          background: linear-gradient(135deg, #384959 0%, #4a6278 100%);
-          color: #fff; border: none; border-radius: 14px;
-          font-size: 14px; font-weight: 800; cursor: pointer;
-          display: flex; align-items: center; justify-content: center; gap: 8px;
-          transition: opacity 0.15s, transform 0.15s; font-family: 'DM Sans', sans-serif;
-        }
-        .pm-pay-btn:hover:not(:disabled) { opacity: 0.9; transform: translateY(-1px); }
-        .pm-pay-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-        .pm-spinner { width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: pm-spin 0.7s linear infinite; }
-        .pm-secure-note { display: flex; align-items: center; justify-content: center; gap: 5px; font-size: 10px; color: #a0aec0; padding-bottom: 20px; }
-
-        /* Mobile back */
-        .pm-mobile-back { display: none; align-items: center; gap: 4px; font-size: 11px; color: #8899aa; background: none; border: none; cursor: pointer; padding: 0; margin-bottom: 6px; }
-
-        @media (max-width: 640px) {
-          .pm-body { flex-direction: column; }
-          .pm-left { width: 100%; }
-          .pm-mobile-next { display: flex; }
-          .pm-mobile-back { display: flex; }
-          .pm-right { display: none; }
-          .pm-right.active { display: flex; }
-          .pm-row { grid-template-columns: 1fr; }
-          .pm-field-group { padding: 20px 16px; }
-          .pm-right-header { padding: 20px 16px 16px; }
-          .pm-pay-btn { margin: 16px; }
-          .pm-prefill-banner { margin: 0 16px; }
-        }
+        @import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&display=swap');
+        .pm-font-sora { font-family: 'Sora', sans-serif; }
+        .pm-font-dm   { font-family: 'DM Sans', sans-serif; }
+        @keyframes pm-fade  { from{opacity:0} to{opacity:1} }
+        @keyframes pm-slide { from{transform:translateY(100%)} to{transform:translateY(0)} }
+        @keyframes pm-pop   { from{opacity:0;transform:scale(0.96) translateY(10px)} to{opacity:1;transform:scale(1) translateY(0)} }
+        @keyframes pm-spin  { to{transform:rotate(360deg)} }
+        @keyframes pm-pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+        .pm-overlay   { animation: pm-fade 0.2s ease both; }
+        .pm-slide-up  { animation: pm-slide 0.38s cubic-bezier(0.32,0.72,0,1) both; }
+        .pm-pop-in    { animation: pm-pop 0.32s cubic-bezier(0.22,1,0.36,1) both; }
+        .pm-spinner   { width:18px;height:18px;border-radius:50%;border:2.5px solid rgba(255,255,255,0.3);border-top-color:#fff;animation:pm-spin 0.7s linear infinite;flex-shrink:0; }
+        .pm-skel      { animation:pm-pulse 1.4s ease infinite;background:#f0f4f8;border-radius:12px; }
+        .pm-noscroll  { scrollbar-width:none; }
+        .pm-noscroll::-webkit-scrollbar { display:none; }
+        .pm-thinscroll { scrollbar-width:thin;scrollbar-color:#dde7f0 transparent; }
+        .pm-thinscroll::-webkit-scrollbar { width:4px; }
+        .pm-thinscroll::-webkit-scrollbar-thumb { background:#dde7f0;border-radius:4px; }
+        input[type=number] { -moz-appearance:textfield; }
       `}</style>
 
-      <div className={`pm-overlay`}>
-        <div className="pm-modal">
-          <div className="pm-body">
+      {/* ── Overlay ────────────────────────────────────────────────────────── */}
+      <div
+        className="pm-overlay pm-font-dm fixed inset-0 z-[9999] flex items-end lg:items-center justify-center bg-black/50 backdrop-blur-sm"
+        onClick={onClose}
+      >
 
-            {/* ── LEFT: Plan Summary ── */}
-            <div className={`pm-left${step === "form" ? " hidden-mobile" : ""}`}>
-              <div className="pm-left-inner">
-                <div className="pm-plan-badge"><Sparkles size={11} /> Selected Plan</div>
+        {/* ══════════════════════════════════════════════════════════════════
+            MOBILE / TABLET  —  bottom sheet, single scrollable column
+        ══════════════════════════════════════════════════════════════════ */}
+        <div
+          className="pm-slide-up lg:hidden w-full bg-white rounded-t-3xl flex flex-col"
+          style={{ maxHeight: "94dvh" }}
+          onClick={e => e.stopPropagation()}
+        >
+          {/* drag handle */}
+          <div className="flex justify-center pt-3 pb-1 flex-shrink-0">
+            <div className="w-10 h-1 rounded-full bg-gray-200" />
+          </div>
 
-                <div className="pm-plan-icon">
-                  <PlanIcon size={26} color="white" />
-                </div>
+          {/* scrollable content */}
+          <div className="flex-1 overflow-y-auto pm-thinscroll">
 
+            {/* Dark plan band */}
+            <div className="bg-gradient-to-br from-[#384959] via-[#4a6880] to-[#6A89A7] px-5 pt-4 pb-6">
+
+              {/* Header row */}
+              <div className="flex items-start justify-between mb-4">
                 <div>
-                  <div className="pm-plan-title">{selectedPlan.name} Plan</div>
-                  <div className="pm-plan-sub">₹{selectedPlan.price} per user · per year</div>
+                  <span className="inline-flex items-center gap-1.5 bg-white/10 border border-white/20 text-blue-100 text-[10px] font-bold tracking-widest uppercase px-2.5 py-1 rounded-full mb-2">
+                    <Sparkles size={10} />{isUpgrade ? "Upgrade Plan" : "Selected Plan"}
+                  </span>
+                  <h2 className="pm-font-sora text-2xl font-bold text-white">{selectedPlan.name} Plan</h2>
+                  <p className="text-[12px] text-blue-200/70 mt-0.5">₹{selectedPlan.price}/user/year</p>
                 </div>
-
-                <ul className="pm-features">
-                  {selectedPlan.features.map((f) => (
-                    <li key={f}><CheckCircle2 size={13} color="rgba(255,255,255,0.7)" />{f}</li>
-                  ))}
-                </ul>
-
-                <div className="pm-divider" />
-
-                {/* User Count */}
-                <div className="pm-user-control">
-                  <div className="pm-user-label"><Users size={11} /> Number of Users</div>
-                  <div className="pm-user-row">
-                    <button className="pm-user-btn" onClick={() => { setUserCount((n) => Math.max(1, n - 1)); if (errors.userCount) setErrors({ ...errors, userCount: "" }); }}>−</button>
-                    <input
-                      className="pm-user-input"
-                      type="number" min="1"
-                      value={userCount}
-                      onChange={(e) => { const v = Number(e.target.value); setUserCount(isNaN(v) || v < 1 ? 1 : v); if (errors.userCount) setErrors({ ...errors, userCount: "" }); }}
-                    />
-                    <button className="pm-user-btn" onClick={() => { setUserCount((n) => n + 1); if (errors.userCount) setErrors({ ...errors, userCount: "" }); }}>+</button>
-                  </div>
-                  {errors.userCount && <span className="pm-user-error">⚠ {errors.userCount}</span>}
-                </div>
-
-                {/* Price Breakdown */}
-                <div className="pm-price-card">
-                  <div className="pm-price-row">
-                    <span className="pm-price-label">Subtotal ({userCount} user{userCount !== 1 ? "s" : ""})</span>
-                    <span className="pm-price-value">₹{basePrice.toLocaleString()}</span>
-                  </div>
-                  <div className="pm-price-row">
-                    <span className="pm-price-label">GST (12%)</span>
-                    <span className="pm-price-value">₹{taxAmount.toLocaleString()}</span>
-                  </div>
-                  <div className="pm-price-row total">
-                    <span className="pm-price-label" style={{ fontWeight: 600, opacity: 0.85 }}>Total Due</span>
-                    <span className="pm-price-total-val">₹{totalPrice.toLocaleString()}</span>
-                  </div>
-                </div>
-
-                <button className="pm-mobile-next" onClick={() => setStep("form")}>
-                  Continue to Details <ChevronRight size={16} />
+                <button onClick={onClose}
+                  className="w-9 h-9 rounded-xl bg-white/10 border border-white/20 text-white/70 flex items-center justify-center flex-shrink-0 active:bg-white/20 transition-all mt-1"
+                >
+                  <X size={16} />
                 </button>
               </div>
-            </div>
 
-            {/* ── RIGHT: Form ── */}
-            <div className={`pm-right${step === "form" ? " active" : ""}`}>
-
-              {/* Header */}
-              <div className="pm-right-header">
-                <div style={{ flex: 1 }}>
-                  <button className="pm-mobile-back" onClick={() => setStep("summary")}>
-                    <ArrowLeft size={14} /> Back to summary
-                  </button>
-                  <div className="pm-right-title">Your Details</div>
-                  <div className="pm-right-sub">
-                    {prefillLoading ? "Fetching your saved details…" : "Review your info and proceed to payment"}
-                  </div>
-                </div>
-                <button className="pm-close" onClick={onClose}><X size={16} /></button>
+              {/* Feature pills */}
+              <div className="flex flex-wrap gap-2 mb-5">
+                {selectedPlan.features.map(f => (
+                  <span key={f} className="flex items-center gap-1.5 text-[11px] text-white/80 bg-white/10 rounded-full px-3 py-1">
+                    <CheckCircle2 size={11} className="text-blue-300" />{f}
+                  </span>
+                ))}
               </div>
 
-              {/* Prefill banner */}
-              {!prefillLoading && form.fullName && (
-                <div className="pm-prefill-banner" style={{ marginTop: 20 }}>
-                  <span>✅ Details auto-filled from your account</span>
-                  {!isEditable && (
-                    <button className="pm-prefill-edit" onClick={() => setIsEditable(true)}>
-                      <Pencil size={10} /> Edit
-                    </button>
-                  )}
-                  {isEditable && (
-                    <button className="pm-prefill-edit" style={{ background: "#64748b" }} onClick={() => setIsEditable(false)}>
-                      Lock
-                    </button>
-                  )}
+              {/* Counters */}
+              <p className="text-[10px] font-bold text-blue-200/60 uppercase tracking-widest mb-3 flex items-center gap-1.5">
+                <Users size={10} /> User Counts
+              </p>
+              <div className="flex gap-4 mb-4">
+                <Counter label="Students" icon={GraduationCap} value={studentCount} setValue={setStudentCount}
+                  errorKey="studentCount" errors={errors} setErrors={setErrors} minVal={MIN_STUDENTS} />
+                <Counter label="Teachers" icon={BookOpen} value={teacherCount} setValue={setTeacherCount}
+                  errorKey="teacherCount" errors={errors} setErrors={setErrors} minVal={MIN_TEACHERS} />
+              </div>
+
+              {/* Total users + price — side by side */}
+              <div className="grid grid-cols-2 gap-3 mb-4">
+                <div className="bg-white/[0.08] border border-white/10 rounded-2xl px-4 py-3 text-center">
+                  <p className="text-[9px] font-bold text-blue-200/50 uppercase tracking-widest mb-0.5">Total Users</p>
+                  <span className="pm-font-sora text-2xl font-bold text-white">{userCount}</span>
+                </div>
+                <div className="bg-white/[0.08] border border-white/10 rounded-2xl px-4 py-3 text-center">
+                  <p className="text-[9px] font-bold text-blue-200/50 uppercase tracking-widest mb-0.5">Total Due</p>
+                  <span className="pm-font-sora text-xl font-bold text-white">₹{totalPrice.toLocaleString()}</span>
+                  <p className="text-[9px] text-blue-200/40 mt-0.5">incl. 12% GST</p>
+                </div>
+              </div>
+
+              {/* Pre-fill notice */}
+              {prefilling ? (
+                <div className="flex items-center gap-2 text-blue-200/50 text-[11px]">
+                  <RefreshCw size={11} className="animate-spin" /> Loading saved details…
+                </div>
+              ) : hasPrefilled ? (
+                <div className="flex items-start gap-2 bg-white/[0.08] border border-white/10 rounded-xl px-3 py-2.5">
+                  <AlertCircle size={13} className="text-blue-300 mt-0.5 flex-shrink-0" />
+                  <p className="text-[11px] text-blue-200/70 leading-snug">
+                    Details pre-filled from your last payment — edit below if needed.
+                  </p>
+                </div>
+              ) : null}
+            </div>
+
+            {/* White form section */}
+            <div className="px-5 py-6">
+              <h3 className="pm-font-sora text-[17px] font-bold text-[#384959] mb-1">Your Details</h3>
+              <p className="text-[12px] text-[#88a0b5] mb-5">
+                {hasPrefilled ? "Pre-filled — edit if anything changed" : "Fill in to proceed with payment"}
+              </p>
+              {prefilling ? (
+                <div className="flex flex-col gap-3">
+                  {[1,2,3,4,5].map(i => <div key={i} className="pm-skel" style={{ height: 44 }} />)}
+                </div>
+              ) : (
+                <div className="flex flex-col gap-4">
+                  <Field id="m-fullName"   label="Full Name"      name="fullName"   placeholder="John Doe"               autoComplete="name"           value={form.fullName}   onChange={handleChange} error={errors.fullName} />
+                  <Field id="m-email"      label="Email"          name="email"      type="email" placeholder="john@school.edu"   autoComplete="email"          value={form.email}     onChange={handleChange} error={errors.email} />
+                  <Field id="m-schoolName" label="School Name"    name="schoolName" placeholder="St. Mary's High School"  autoComplete="organization"   value={form.schoolName} onChange={handleChange} error={errors.schoolName} />
+                  <Field id="m-phone"      label="Phone Number"   name="phone"      type="tel"   placeholder="+91 98765 43210"   autoComplete="tel"            value={form.phone}     onChange={handleChange} error={errors.phone} />
+                  <Field id="m-address"    label="City / Address" name="address"    placeholder="Mumbai, Maharashtra"     autoComplete="address-level2" value={form.address}   onChange={handleChange} error={errors.address} />
                 </div>
               )}
-
-              {/* Form Fields */}
-              <div className="pm-field-group">
-
-                <div className="pm-row">
-                  <div className="pm-field">
-                    <label className="pm-label">Full Name</label>
-                    <input
-                      className={`pm-input${errors.fullName ? " pm-error" : ""}`}
-                      name="fullName" value={form.fullName}
-                      onChange={handleChange} disabled={!isEditable}
-                      placeholder="John Doe"
-                    />
-                    {errors.fullName && <span className="pm-err-msg">⚠ {errors.fullName}</span>}
-                  </div>
-                  <div className="pm-field">
-                    <label className="pm-label">Email</label>
-                    <input
-                      className={`pm-input${errors.email ? " pm-error" : ""}`}
-                      name="email" type="email" value={form.email}
-                      onChange={handleChange} disabled={!isEditable}
-                      placeholder="john@school.edu"
-                    />
-                    {errors.email && <span className="pm-err-msg">⚠ {errors.email}</span>}
-                  </div>
-                </div>
-
-                <div className="pm-field">
-                  <label className="pm-label">School Name</label>
-                  <input
-                    className={`pm-input${errors.schoolName ? " pm-error" : ""}`}
-                    name="schoolName" value={form.schoolName}
-                    onChange={handleChange} disabled={!isEditable}
-                    placeholder="e.g. St. Mary's High School"
-                  />
-                  {errors.schoolName && <span className="pm-err-msg">⚠ {errors.schoolName}</span>}
-                </div>
-
-                <div className="pm-row">
-                  <div className="pm-field">
-                    <label className="pm-label">Phone Number</label>
-                    <input
-                      className={`pm-input${errors.phone ? " pm-error" : ""}`}
-                      name="phone" type="tel" value={form.phone}
-                      onChange={handleChange} disabled={!isEditable}
-                      placeholder="+91 98765 43210"
-                    />
-                    {errors.phone && <span className="pm-err-msg">⚠ {errors.phone}</span>}
-                  </div>
-                  <div className="pm-field">
-                    <label className="pm-label">City / Address</label>
-                    <input
-                      className={`pm-input${errors.address ? " pm-error" : ""}`}
-                      name="address" value={form.address}
-                      onChange={handleChange} disabled={!isEditable}
-                      placeholder="Mumbai, Maharashtra"
-                    />
-                    {errors.address && <span className="pm-err-msg">⚠ {errors.address}</span>}
-                  </div>
-                </div>
-
-              </div>
-
-              {/* Pay Button */}
-              <button className="pm-pay-btn" onClick={handlePayment} disabled={loading || prefillLoading}>
-                {loading ? (
-                  <><div className="pm-spinner" /> Processing...</>
-                ) : (
-                  <>Pay ₹{totalPrice.toLocaleString()} <ChevronRight size={16} /></>
-                )}
-              </button>
-
-              <div className="pm-secure-note">
-                <Lock size={11} /> Secured by Razorpay · 256-bit SSL encryption
-              </div>
-
             </div>
+
+          </div>{/* end scrollable */}
+
+          {/* Sticky pay button */}
+          <div className="flex-shrink-0 px-5 py-4 border-t border-gray-100 bg-white">
+            <button
+              onClick={handlePayment}
+              disabled={loading || prefilling}
+              className="w-full h-[52px] rounded-2xl bg-gradient-to-br from-[#384959] to-[#5a7a96] text-white text-[15px] font-semibold flex items-center justify-center gap-2 pm-font-dm shadow-[0_4px_20px_rgba(56,73,89,0.3)] transition-all active:scale-[0.98] disabled:opacity-60"
+            >
+              {loading ? <><div className="pm-spinner" /> Processing…</>
+               : prefilling ? <><RefreshCw size={15} className="animate-spin" /> Loading…</>
+               : <>Pay ₹{totalPrice.toLocaleString()} <ChevronRight size={16} /></>}
+            </button>
+            <p className="mt-2.5 flex items-center justify-center gap-1.5 text-[10px] text-[#a0b5c8]">
+              <Lock size={10} /> Secured by Razorpay · 256-bit SSL
+            </p>
           </div>
         </div>
+
+        {/* ══════════════════════════════════════════════════════════════════
+            DESKTOP  ≥1024px  —  two-column card, height = content (not vh)
+        ══════════════════════════════════════════════════════════════════ */}
+        <div
+          className="pm-pop-in hidden lg:flex w-full max-w-5xl xl:max-w-6xl rounded-2xl shadow-2xl overflow-hidden bg-white"
+          style={{ maxHeight: "90vh" }}
+          onClick={e => e.stopPropagation()}
+        >
+          {/* ── LEFT: dark summary panel ── */}
+          <div
+            className="flex flex-col bg-gradient-to-br from-[#384959] via-[#4a6880] to-[#6A89A7] px-8 py-9 overflow-y-auto pm-noscroll"
+            style={{ width: 400, flexShrink: 0 }}
+          >
+            <span className="inline-flex items-center gap-1.5 self-start bg-blue-300/[0.18] border border-blue-300/30 text-blue-200 text-[11px] font-bold tracking-widest uppercase px-3 py-1 rounded-full mb-5">
+              <Sparkles size={11} />{isUpgrade ? "Upgrade Plan" : "Selected Plan"}
+            </span>
+
+            <h2 className="pm-font-sora text-[30px] font-bold text-white leading-tight mb-1.5">
+              {selectedPlan.name} Plan
+            </h2>
+            <p className="text-[13px] text-blue-200/65 mb-5">₹{selectedPlan.price} per user · per year</p>
+
+            <ul className="flex flex-col gap-2.5 mb-6">
+              {selectedPlan.features.map(f => (
+                <li key={f} className="flex items-center gap-2.5 text-[13px] text-white/85">
+                  <CheckCircle2 size={14} className="text-blue-300 flex-shrink-0" />{f}
+                </li>
+              ))}
+            </ul>
+
+            <div className="h-px bg-gradient-to-r from-blue-300/40 to-transparent mb-5" />
+
+            {/* Pre-fill notice */}
+            {prefilling ? (
+              <div className="flex items-center gap-2 text-blue-200/50 text-[11px] mb-4">
+                <RefreshCw size={11} className="animate-spin" /> Loading your saved details…
+              </div>
+            ) : hasPrefilled ? (
+              <div className="flex items-start gap-2 bg-white/[0.08] border border-white/10 rounded-xl px-4 py-3 mb-5">
+                <AlertCircle size={13} className="text-blue-300 mt-0.5 flex-shrink-0" />
+                <p className="text-[11px] text-blue-200/75 leading-snug">
+                  Pre-filled from your last payment. Edit the form on the right if anything changed.
+                </p>
+              </div>
+            ) : null}
+
+            {/* Counters */}
+            <p className="text-[10px] font-bold text-blue-200/60 uppercase tracking-widest mb-3 flex items-center gap-1.5">
+              <Users size={10} /> User Counts
+            </p>
+            <div className="flex gap-4 mb-4">
+              <Counter label="Students" icon={GraduationCap} value={studentCount} setValue={setStudentCount}
+                errorKey="studentCount" errors={errors} setErrors={setErrors} minVal={MIN_STUDENTS} />
+              <Counter label="Teachers" icon={BookOpen} value={teacherCount} setValue={setTeacherCount}
+                errorKey="teacherCount" errors={errors} setErrors={setErrors} minVal={MIN_TEACHERS} />
+            </div>
+
+            <div className="px-4 py-3 rounded-xl bg-white/[0.08] border border-white/10 text-center mb-1.5">
+              <p className="text-[9px] font-bold text-blue-200/50 uppercase tracking-widest mb-1">Total Users</p>
+              <span className="pm-font-sora text-2xl font-bold text-white">{userCount}</span>
+            </div>
+            <p className="text-[10px] text-blue-200/40 text-center mb-5">
+              Min {MIN_STUDENTS} students &amp; {MIN_TEACHERS} teachers
+            </p>
+
+            {/* Price breakdown */}
+            <div className="bg-white/[0.07] border border-white/10 rounded-2xl px-5 py-4 flex flex-col gap-2.5 mt-auto">
+              <div className="flex justify-between items-center">
+                <span className="text-[13px] text-blue-200/70">Subtotal ({userCount} users)</span>
+                <span className="text-[13px] text-white font-medium">₹{basePrice.toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-[13px] text-blue-200/70">GST (12%)</span>
+                <span className="text-[13px] text-white font-medium">₹{taxAmount.toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between items-center border-t border-white/10 pt-2.5 mt-1">
+                <span className="text-[13px] text-blue-200/85 font-semibold">Total Due</span>
+                <span className="pm-font-sora text-[22px] font-bold text-white">₹{totalPrice.toLocaleString()}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* ── RIGHT: white form panel ── */}
+          <div className="flex-1 flex flex-col px-8 xl:px-10 py-9 overflow-y-auto pm-thinscroll min-w-0">
+
+            {/* Header */}
+            <div className="flex items-start justify-between mb-6">
+              <div>
+                <h3 className="pm-font-sora text-[22px] font-bold text-[#384959] mb-1">Your Details</h3>
+                <p className="text-[13px] text-[#88a0b5]">
+                  {prefilling
+                    ? "Fetching your saved details…"
+                    : hasPrefilled
+                    ? "Pre-filled from your last payment — edit if needed"
+                    : "Fill in to proceed with payment"}
+                </p>
+              </div>
+              <button
+                onClick={onClose}
+                className="w-9 h-9 rounded-xl border-[1.5px] border-[#e8eff6] bg-[#f7fafd] text-[#6A89A7] flex items-center justify-center flex-shrink-0 hover:bg-[#eef4fb] hover:text-[#384959] transition-all cursor-pointer"
+                aria-label="Close"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Form fields */}
+            {prefilling ? (
+              <div className="flex flex-col gap-4">
+                {[1,2,3,4,5].map(n => <div key={n} className="pm-skel" style={{ height: 44 }} />)}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-5">
+                <div className="grid grid-cols-2 gap-4">
+                  <Field id="d-fullName" label="Full Name" name="fullName" placeholder="John Doe"
+                    autoComplete="name" value={form.fullName} onChange={handleChange} error={errors.fullName} />
+                  <Field id="d-email" label="Email" name="email" type="email" placeholder="john@school.edu"
+                    autoComplete="email" value={form.email} onChange={handleChange} error={errors.email} />
+                </div>
+                <Field id="d-schoolName" label="School Name" name="schoolName" placeholder="St. Mary's High School"
+                  autoComplete="organization" value={form.schoolName} onChange={handleChange} error={errors.schoolName} />
+                <div className="grid grid-cols-2 gap-4">
+                  <Field id="d-phone" label="Phone Number" name="phone" type="tel" placeholder="+91 98765 43210"
+                    autoComplete="tel" value={form.phone} onChange={handleChange} error={errors.phone} />
+                  <Field id="d-address" label="City / Address" name="address" placeholder="Mumbai, Maharashtra"
+                    autoComplete="address-level2" value={form.address} onChange={handleChange} error={errors.address} />
+                </div>
+              </div>
+            )}
+
+            {/* Pay button */}
+            <div className="mt-8 pt-6 border-t border-gray-100">
+              <button
+                onClick={handlePayment}
+                disabled={loading || prefilling}
+                className="w-full h-[52px] rounded-[14px] bg-gradient-to-br from-[#384959] to-[#5a7a96] text-white text-[15px] font-semibold flex items-center justify-center gap-2 pm-font-dm shadow-[0_4px_16px_rgba(56,73,89,0.25)] transition-all hover:opacity-90 hover:-translate-y-px active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {loading ? <><div className="pm-spinner" /> Processing…</>
+                 : prefilling ? <><RefreshCw size={15} className="animate-spin" /> Loading details…</>
+                 : <>Pay ₹{totalPrice.toLocaleString()} <ChevronRight size={16} /></>}
+              </button>
+              <p className="mt-3 flex items-center justify-center gap-1.5 text-[11px] text-[#a0b5c8]">
+                <Lock size={11} /> Secured by Razorpay · 256-bit SSL encryption
+              </p>
+            </div>
+
+          </div>
+        </div>
+
       </div>
     </>
   );

@@ -66,6 +66,20 @@ async function incrementStudentCount(subscriptionId, by = 1) {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const toEnum = (v) => (v ? v.toUpperCase().replace(/\s+/g, "_") : undefined);
 
+/**
+ * Strips spaces/hyphens and ensures a "91" country-code prefix.
+ * "91 98765-43210" → "919876543210"
+ * "98765-43210"    → "919876543210"
+ * "919876543210"   → "919876543210"
+ */
+const normalizePhone = (v) => {
+  if (!v) return v;
+  const stripped = String(v).replace(/[\s\-]/g, "");
+  if (/^91\d{10}$/.test(stripped)) return stripped;
+  if (/^\d{10}$/.test(stripped)) return "91" + stripped;
+  return stripped;
+};
+
 const bloodGroupMap = {
   A_PLUS: "A_POS",
   A_MINUS: "A_NEG",
@@ -194,7 +208,7 @@ export const registerStudent = async (req, res) => {
 export const createParentLogin = async (req, res) => {
   try {
     const { id: studentId } = req.params;
-    const { name, email, password, phone, occupation, relation } = req.body;
+    const { name, email, password, phone, occupation, relation,  anniversaryDate, } = req.body;
 
     if (!name || !email || !password || !relation)
       return res
@@ -235,8 +249,11 @@ export const createParentLogin = async (req, res) => {
           name,
           email,
           password: hashed,
-          phone: phone || null,
+          phone: normalizePhone(phone) || null,
           occupation: occupation || null,
+          anniversaryDate: anniversaryDate
+            ? new Date(anniversaryDate)
+            : null,
           schoolId,
         },
       });
@@ -261,6 +278,7 @@ export const createParentLogin = async (req, res) => {
             email: true,
             phone: true,
             occupation: true,
+            anniversaryDate: true,
           },
         },
       },
@@ -415,14 +433,14 @@ export const savePersonalInfo = async (req, res) => {
     const data = compact({
       firstName,
       lastName,
-      phone,
+      phone: normalizePhone(phone),
       address,
       city,
       state,
       zipCode,
       parentName,
       parentEmail,
-      parentPhone,
+      parentPhone: normalizePhone(parentPhone),
       emergencyContact,
       bloodGroup: fixedBloodGroup,
       medicalConditions,
@@ -1604,4 +1622,4 @@ export const getStudentLimitStatus = async (req, res) => {
     console.error("[getStudentLimitStatus]", err);
     return res.status(500).json({ message: "Server error" });
   }
-};
+}; 
